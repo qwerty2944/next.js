@@ -674,6 +674,7 @@ export function printCustomRoutes({
 type PageIsStaticResult = {
   isRoutePPREnabled?: boolean
   isStatic?: boolean
+  hasPrerenderMatcher?: true
   hasServerProps?: boolean
   hasStaticProps?: boolean
   prerenderedRoutes: PrerenderedRoute[] | undefined
@@ -699,6 +700,7 @@ export async function isPageStatic({
   edgeInfo,
   pageType,
   cacheComponents,
+  experimentalPrerenderMatching,
   authInterrupts,
   useCacheTimeout,
   staticPageGenerationTimeout,
@@ -719,6 +721,7 @@ export async function isPageStatic({
   page: string
   distDir: string
   cacheComponents: boolean
+  experimentalPrerenderMatching: boolean
   authInterrupts: boolean
   useCacheTimeout: number
   staticPageGenerationTimeout: number
@@ -779,6 +782,7 @@ export async function isPageStatic({
       let prerenderedRoutes: PrerenderedRoute[] | undefined
       let prerenderRouteMatchers: PrerenderRouteMatcher[] | undefined
       let prerenderFallbackMode: FallbackMode | undefined
+      let hasPrerenderMatcher: true | undefined
       let appConfig: AppSegmentConfig = {}
       let rootParamKeys: readonly string[] | undefined
       const pathIsEdgeRuntime = isEdgeRuntime(pageRuntime)
@@ -903,11 +907,13 @@ export async function isPageStatic({
               prerenderedRoutes,
               prerenderRouteMatchers,
               fallbackMode: prerenderFallbackMode,
+              hasPrerenderMatcher,
             } = await buildAppStaticPaths({
               dir,
               page,
               route,
               cacheComponents,
+              experimentalPrerenderMatching,
               authInterrupts,
               useCacheTimeout,
               staticPageGenerationTimeout,
@@ -995,6 +1001,7 @@ export async function isPageStatic({
       return {
         isStatic,
         isRoutePPREnabled,
+        hasPrerenderMatcher,
         prerenderFallbackMode,
         prerenderedRoutes,
         prerenderRouteMatchers,
