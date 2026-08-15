@@ -2170,7 +2170,6 @@ export default async function build(
       const staticPaths = new Map<string, PrerenderedRoute[]>()
       const prerenderRouteMatchers = new Map<string, PrerenderRouteMatcher[]>()
       const appNormalizedPaths = new Map<string, string>()
-      const prerenderMatcherRoutes = new Set<string>()
       const fallbackModes = new Map<string, FallbackMode>()
       const appDefaultConfigs = new Map<string, AppSegmentConfig>()
       const pageInfos: PageInfos = new Map<string, PageInfo>()
@@ -2513,9 +2512,6 @@ export default async function build(
 
                       if (pageType === 'app' && originalAppPath) {
                         appNormalizedPaths.set(originalAppPath, page)
-                        if (workerResult.hasPrerenderMatcher) {
-                          prerenderMatcherRoutes.add(page)
-                        }
                         // TODO-APP: handle prerendering with edge
                         if (isEdgeRuntime(pageRuntime)) {
                           isStatic = false
