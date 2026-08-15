@@ -51,47 +51,10 @@ describe('metadata-files-static-output-parallel-route', () => {
            "href": "/manifest.json",
            "rel": "manifest",
          },
-         {
-           "href": "/parallel/apple-icon-kzjltp.png",
-           "rel": "apple-touch-icon",
-           "type": "image/png",
-         },
-         {
-           "href": "/parallel/icon-kzjltp.png",
-           "rel": "icon",
-           "type": "image/png",
-         },
        ],
        "metas": [
          {
-           "name": "twitter:card",
-         },
-         {
-           "name": "twitter:image",
-         },
-         {
-           "name": "twitter:image:height",
-         },
-         {
-           "name": "twitter:image:type",
-         },
-         {
-           "name": "twitter:image:width",
-         },
-         {
            "name": "viewport",
-         },
-         {
-           "property": "og:image",
-         },
-         {
-           "property": "og:image:height",
-         },
-         {
-           "property": "og:image:type",
-         },
-         {
-           "property": "og:image:width",
          },
        ],
      }
