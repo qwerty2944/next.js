@@ -25,6 +25,7 @@ const defaultNormalizer: AppPathNormalizer = {
  * the catch-all. If it finds a match, it will add the catch-all to the parallel route's list of possible routes.
  *
  * @param appPaths The appPaths to transform
+ * @returns Page app paths that are not present in any retained matcher.
  */
 export function normalizeCatchAllRoutes(
   appPaths: Record<string, string[]>,
@@ -33,7 +34,14 @@ export function normalizeCatchAllRoutes(
     strictRouteMatching = false,
     defaultAppPaths = [],
   }: NormalizeCatchAllRoutesOptions = {}
-) {
+): string[] {
+  const pageAppPaths = strictRouteMatching
+    ? new Set(
+        Object.values(appPaths)
+          .flat()
+          .filter((appPath) => appPath.endsWith('/page'))
+      )
+    : undefined
   const catchAllRoutes = [
     ...new Set(
       Object.values(appPaths)
@@ -84,7 +92,14 @@ export function normalizeCatchAllRoutes(
 
   if (strictRouteMatching) {
     pruneUnrenderableCatchAllRoutes(appPaths, defaultAppPaths)
+
+    const matchedAppPaths = new Set(Object.values(appPaths).flat())
+    return [...pageAppPaths!]
+      .filter((appPath) => !matchedAppPaths.has(appPath))
+      .sort()
   }
+
+  return []
 }
 
 /**
