@@ -542,6 +542,14 @@ impl AppPageLoaderTree {
             })
     }
 
+    fn contains_builtin_not_found_default(&self, builtin_default: &FileSystemPath) -> bool {
+        self.is_builtin_not_found_default(builtin_default)
+            || self
+                .parallel_routes
+                .values()
+                .any(|tree| tree.contains_builtin_not_found_default(builtin_default))
+    }
+
     /// Returns true when one slot matches through a catch-all while a different slot at the same
     /// level can only render Next.js' built-in not-found default.
     fn has_unmatched_parallel_route(&self, builtin_default: &FileSystemPath) -> bool {
@@ -941,6 +949,27 @@ async fn directory_tree_to_entrypoints(
                     .then_some(route)
             })
             .collect::<Vec<_>>();
+        let builtin_default = get_next_package(app_dir.clone())
+            .await?
+            .join("dist/client/components/builtin/default.js")?;
+
+        // Candidate construction may temporarily synthesize defaults that disappear when pages
+        // for the same pathname are combined. Only the completed entrypoint map can enforce this
+        // invariant: every retained ordinary matcher must construct a complete route tree.
+        for (app_path, entrypoint) in entrypoints_ref.iter() {
+            let Entrypoint::AppPage { loader_tree, .. } = entrypoint else {
+                continue;
+            };
+            let loader_tree = loader_tree.await?;
+            if app_path.intercepted_path().is_none()
+                && loader_tree.contains_builtin_not_found_default(&builtin_default)
+            {
+                bail!(
+                    "Invariant: strict route matching retained the incomplete route matcher \
+                     `{app_path}`"
+                );
+            }
+        }
         let missing_canonical_interception_routes = entrypoints_ref
             .iter()
             .filter_map(|(interception_route, entrypoint)| {
