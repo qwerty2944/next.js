@@ -2544,11 +2544,9 @@ export default async function build(
                               originalAppPath,
                               workerResult.prerenderedRoutes
                             )
-                            ssgPageRoutes = workerResult.prerenderedRoutes
-                              .filter(
-                                (route) => route.isPrerenderOutput !== false
-                              )
-                              .map((route) => route.pathname)
+                            ssgPageRoutes = workerResult.prerenderedRoutes.map(
+                              (route) => route.pathname
+                            )
                             isSSG = true
                           }
 
@@ -3126,11 +3124,6 @@ export default async function build(
                   : false
 
                 routes.forEach((route) => {
-                  if (route.isPrerenderOutput === false) {
-                    delete defaultMap[route.pathname]
-                    return
-                  }
-
                   // If the route has any dynamic root segments, we need to skip
                   // rendering the route. This is because we don't support
                   // revalidating the shells without the parameters present.

@@ -158,6 +158,7 @@ import { setCacheBustingSearchParamWithHash } from '../client/components/router-
 import type { CacheControl } from './lib/cache-control'
 import type {
   FallbackRouteParam,
+  PrerenderRouteMatcher,
   PrerenderedRoute,
 } from '../build/static-paths/types'
 import { createOpaqueFallbackRouteParams } from './request/fallback-params'
@@ -2043,6 +2044,7 @@ export default abstract class Server<
   }): Promise<{
     staticPaths?: string[]
     prerenderedRoutes?: PrerenderedRoute[]
+    prerenderRouteMatchers?: PrerenderRouteMatcher[]
     fallbackMode?: FallbackMode
     validationFallbackRouteParams?: readonly FallbackRouteParam[]
   }> {
@@ -2485,20 +2487,23 @@ export default abstract class Server<
       }
 
       if (isAppPath && this.nextConfig.cacheComponents) {
-        if (pathsResults.prerenderedRoutes?.length) {
+        if (
+          pathsResults.prerenderedRoutes?.length ||
+          pathsResults.prerenderRouteMatchers?.length
+        ) {
           // The foreground render remains value-sensitive: select the
-          // most-specific generated route that matches this URL. Validation is
-          // value-insensitive: unless an explicit fallback boundary overrides
-          // it below, use the most-specific param shape generated anywhere for
-          // this route. For example, a generated `/t1/b1` proves the `*/*`
-          // shape for validation of `/t2/b2`, even though it is not a cache hit
-          // for the foreground request.
-          let perUrlPrerenderedRoute: PrerenderedRoute | undefined
+          // most-specific output or matcher that matches this URL. Validation
+          // is value-insensitive: unless an explicit fallback boundary
+          // overrides it below, use the most-specific output shape generated
+          // anywhere for this route. For example, a generated `/t1/b1` proves
+          // the `*/*` shape for validation of `/t2/b2`, even though it is not a
+          // cache hit for the foreground request.
+          let perUrlRoute: PrerenderedRoute | PrerenderRouteMatcher | undefined
           let smallestFallbackRouteParams:
             | readonly FallbackRouteParam[]
             | undefined
           let perUrlFallbackMode: FallbackMode | undefined
-          for (const route of pathsResults.prerenderedRoutes) {
+          for (const route of pathsResults.prerenderedRoutes ?? []) {
             const fallbackRouteParams = route.fallbackRouteParams ?? []
             if (
               smallestFallbackRouteParams === undefined ||
@@ -2510,11 +2515,22 @@ export default abstract class Server<
               continue
             }
             if (
-              perUrlPrerenderedRoute === undefined ||
+              perUrlRoute === undefined ||
               fallbackRouteParams.length <
-                (perUrlPrerenderedRoute.fallbackRouteParams?.length ?? 0)
+                (perUrlRoute.fallbackRouteParams?.length ?? 0)
             ) {
-              perUrlPrerenderedRoute = route
+              perUrlRoute = route
+              perUrlFallbackMode = route.fallbackMode
+            }
+          }
+          for (const route of pathsResults.prerenderRouteMatchers ?? []) {
+            if (!getRouteRegex(route.pathname).re.test(urlPathname)) continue
+            if (
+              perUrlRoute === undefined ||
+              route.fallbackRouteParams.length <
+                (perUrlRoute.fallbackRouteParams?.length ?? 0)
+            ) {
+              perUrlRoute = route
               perUrlFallbackMode = route.fallbackMode
             }
           }
@@ -2523,7 +2539,7 @@ export default abstract class Server<
           }
 
           let requestFallbackRouteParams =
-            perUrlPrerenderedRoute?.fallbackRouteParams ?? []
+            perUrlRoute?.fallbackRouteParams ?? []
           const explicitValidationFallbackRouteParams =
             pathsResults.validationFallbackRouteParams
           if (explicitValidationFallbackRouteParams) {

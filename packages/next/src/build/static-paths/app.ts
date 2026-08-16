@@ -422,6 +422,37 @@ interface TrieNode {
   routes: PrerenderedRoute[]
 }
 
+function getRemainingPrerenderableParams(
+  params: Params,
+  fallbackRouteParams: readonly FallbackRouteParam[],
+  pathnameSegments: ReadonlyArray<{
+    readonly paramName: string
+    readonly isPrerenderable: boolean
+  }>
+): readonly FallbackRouteParam[] | undefined {
+  const fallbackRouteParamsByName = new Map(
+    fallbackRouteParams.map((param) => [param.paramName, param])
+  )
+  const remainingPrerenderableParams: FallbackRouteParam[] = []
+
+  // Only unresolved pathname params that can still be prerendered belong
+  // here. Once we hit a purely dynamic param, the rest of the shell also
+  // stays dynamic and cannot be completed into a more specific prerender.
+  for (const segment of pathnameSegments) {
+    if (params.hasOwnProperty(segment.paramName)) continue
+    if (!segment.isPrerenderable) break
+
+    const fallbackRouteParam = fallbackRouteParamsByName.get(segment.paramName)
+    if (!fallbackRouteParam) break
+
+    remainingPrerenderableParams.push(fallbackRouteParam)
+  }
+
+  return remainingPrerenderableParams.length > 0
+    ? remainingPrerenderableParams
+    : undefined
+}
+
 /**
  * Assigns static shell metadata to each prerendered route.
  * This function uses a Trie data structure to efficiently determine whether each route
@@ -594,38 +625,11 @@ export function assignStaticShellMetadata(
         }
 
         if (route.fallbackRouteParams && route.fallbackRouteParams.length > 0) {
-          const fallbackRouteParamsByName = new Map(
-            route.fallbackRouteParams.map((param) => [param.paramName, param])
+          route.remainingPrerenderableParams = getRemainingPrerenderableParams(
+            route.params,
+            route.fallbackRouteParams,
+            pathnameSegments
           )
-          const remainingPrerenderableParams: FallbackRouteParam[] = []
-
-          // Only unresolved pathname params that can still be prerendered
-          // belong here. Once we hit an unresolved param that is purely
-          // dynamic, the rest of the shell also stays dynamic and cannot be
-          // completed into a more specific prerendered shell.
-          for (const segment of pathnameSegments) {
-            if (route.params.hasOwnProperty(segment.paramName)) {
-              continue
-            }
-
-            if (!segment.isPrerenderable) {
-              break
-            }
-
-            const fallbackRouteParam = fallbackRouteParamsByName.get(
-              segment.paramName
-            )
-            if (!fallbackRouteParam) {
-              break
-            }
-
-            remainingPrerenderableParams.push(fallbackRouteParam)
-          }
-
-          route.remainingPrerenderableParams =
-            remainingPrerenderableParams.length > 0
-              ? remainingPrerenderableParams
-              : undefined
         }
       }
     }
@@ -1119,39 +1123,86 @@ export async function buildAppStaticPaths({
       )
     : inferredFallbackMode
 
-  const getFallbackMetadata = (
+  const getRouteFallbackMode = (
     fallbackRouteParams: readonly FallbackRouteParam[],
     fallbackRootParams: readonly string[]
-  ): {
-    fallbackMode: FallbackMode | undefined
-    isPrerenderOutput?: false
-  } => {
+  ): FallbackMode | undefined => {
     if (prerenderMatcher) {
-      const resolvedFallbackMode = getPrerenderMatcherFallbackMode(
+      return getPrerenderMatcherFallbackMode(
         prerenderMatcher,
         fallbackRouteParams,
         inferredFallbackMode
       )
-      return {
-        fallbackMode: resolvedFallbackMode,
-        isPrerenderOutput:
-          fallbackRouteParams.length > 0 &&
-          resolvedFallbackMode !== FallbackMode.PRERENDER
-            ? false
-            : undefined,
-      }
     }
 
-    return {
-      fallbackMode: calculateFallbackMode(
-        dynamicParams,
-        fallbackRootParams,
-        fallbackMode
-      ),
-    }
+    return calculateFallbackMode(
+      dynamicParams,
+      fallbackRootParams,
+      fallbackMode
+    )
   }
 
   const prerenderedRoutesByPathname = new Map<string, PrerenderedRoute>()
+  const prerenderRouteMatchersByPathname = new Map<
+    string,
+    PrerenderRouteMatcher
+  >()
+
+  const addPrerenderCandidate = (
+    params: Params,
+    pathname: string,
+    encodedPathname: string,
+    fallbackRouteParams: readonly FallbackRouteParam[],
+    fallbackRootParams: readonly string[]
+  ): void => {
+    const routeFallbackMode = getRouteFallbackMode(
+      fallbackRouteParams,
+      fallbackRootParams
+    )
+    const remainingPrerenderableParams =
+      cacheComponents && fallbackRouteParams.length > 0
+        ? getRemainingPrerenderableParams(
+            params,
+            fallbackRouteParams,
+            prerenderablePathSegments
+          )
+        : undefined
+
+    if (
+      fallbackRouteParams.length > 0 &&
+      (isRoutePPREnabled || prerenderMatcher)
+    ) {
+      prerenderRouteMatchersByPathname.set(pathname, {
+        pathname,
+        fallbackRouteParams,
+        fallbackMode: routeFallbackMode,
+        fallbackRootParams,
+        remainingPrerenderableParams,
+      })
+    }
+
+    // Explicit blocking and not-found policies describe request matching but
+    // do not produce a shell to render. Legacy inferred routes remain outputs
+    // so an empty shell can continue to select blocking behavior.
+    if (
+      prerenderMatcher &&
+      fallbackRouteParams.length > 0 &&
+      routeFallbackMode !== FallbackMode.PRERENDER
+    ) {
+      return
+    }
+
+    prerenderedRoutesByPathname.set(pathname, {
+      params,
+      pathname,
+      encodedPathname,
+      fallbackRouteParams,
+      fallbackMode: routeFallbackMode,
+      fallbackRootParams,
+      remainingPrerenderableParams,
+      throwOnEmptyStaticShell: true,
+    })
+  }
 
   // Convert rootParamKeys to Set for O(1) lookup.
   const rootParamSet = new Set(rootParamKeys)
@@ -1181,15 +1232,7 @@ export async function buildAppStaticPaths({
 
       // Add the base route, this is the route with all the placeholders as it's
       // derived from the `page` string.
-      prerenderedRoutesByPathname.set(page, {
-        params: {},
-        pathname: page,
-        encodedPathname: page,
-        fallbackRouteParams,
-        ...getFallbackMetadata(fallbackRouteParams, rootParamKeys),
-        fallbackRootParams: rootParamKeys,
-        throwOnEmptyStaticShell: true,
-      })
+      addPrerenderCandidate({}, page, page, fallbackRouteParams, rootParamKeys)
     }
 
     filterUniqueParams(
@@ -1277,15 +1320,13 @@ export async function buildAppStaticPaths({
 
       pathname = normalizePathname(pathname)
 
-      prerenderedRoutesByPathname.set(pathname, {
+      addPrerenderCandidate(
         params,
         pathname,
-        encodedPathname: normalizePathname(encodedPathname),
+        normalizePathname(encodedPathname),
         fallbackRouteParams,
-        ...getFallbackMetadata(fallbackRouteParams, fallbackRootParams),
-        fallbackRootParams,
-        throwOnEmptyStaticShell: true,
-      })
+        fallbackRootParams
+      )
     })
   }
 
@@ -1295,13 +1336,12 @@ export async function buildAppStaticPaths({
       ? [...prerenderedRoutesByPathname.values()]
       : undefined
 
-  // Now we have to set the throwOnEmptyStaticShell for each of the routes.
-  if (prerenderedRoutes && cacheComponents) {
+  if (cacheComponents) {
     const explicitFallbackParamName =
       validationFallbackRouteParams?.[0]?.paramName
 
     if (explicitFallbackParamName) {
-      const hasFallbackValidationRoute = prerenderedRoutes.some(
+      const hasFallbackValidationRoute = prerenderedRoutes?.some(
         (prerenderedRoute) =>
           prerenderedRoute.fallbackMode === FallbackMode.PRERENDER &&
           prerenderedRoute.fallbackRouteParams?.some(
@@ -1325,27 +1365,21 @@ export async function buildAppStaticPaths({
       }
     }
 
-    assignStaticShellMetadata(
-      prerenderedRoutes,
-      prerenderablePathSegments,
-      explicitFallbackParamName
-    )
-  }
-
-  let prerenderRouteMatchers: PrerenderRouteMatcher[] | undefined
-  if (prerenderedRoutes && isRoutePPREnabled) {
-    for (const prerenderedRoute of prerenderedRoutes) {
-      if (!prerenderedRoute.fallbackRouteParams?.length) continue
-      ;(prerenderRouteMatchers ??= []).push({
-        pathname: prerenderedRoute.pathname,
-        fallbackRouteParams: prerenderedRoute.fallbackRouteParams,
-        fallbackMode: prerenderedRoute.fallbackMode,
-        fallbackRootParams: prerenderedRoute.fallbackRootParams,
-        remainingPrerenderableParams:
-          prerenderedRoute.remainingPrerenderableParams,
-      })
+    // Only actual outputs participate in static shell validation. Matcher-only
+    // blocking and not-found directives do not produce anything to render.
+    if (prerenderedRoutes) {
+      assignStaticShellMetadata(
+        prerenderedRoutes,
+        prerenderablePathSegments,
+        explicitFallbackParamName
+      )
     }
   }
+
+  const prerenderRouteMatchers =
+    prerenderRouteMatchersByPathname.size > 0
+      ? [...prerenderRouteMatchersByPathname.values()]
+      : undefined
 
   return {
     fallbackMode,

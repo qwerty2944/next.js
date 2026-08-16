@@ -93,6 +93,7 @@ import type { PrerenderManifest } from '../../build'
 import { getRouteRegex } from '../../shared/lib/router/utils/route-regex'
 import type {
   FallbackRouteParam,
+  PrerenderRouteMatcher,
   PrerenderedRoute,
 } from '../../build/static-paths/types'
 import { HMR_MESSAGE_SENT_TO_BROWSER } from './hot-reloader-types'
@@ -829,6 +830,7 @@ export default class DevServer extends Server {
     isAppPath: boolean
   }): Promise<{
     prerenderedRoutes?: PrerenderedRoute[]
+    prerenderRouteMatchers?: PrerenderRouteMatcher[]
     staticPaths?: string[]
     fallbackMode?: FallbackMode
     validationFallbackRouteParams?: readonly FallbackRouteParam[]
@@ -890,6 +892,7 @@ export default class DevServer extends Server {
       .then(async (res) => {
         const {
           prerenderedRoutes,
+          prerenderRouteMatchers,
           fallbackMode: fallback,
           validationFallbackRouteParams,
         } = res.value
@@ -927,6 +930,7 @@ export default class DevServer extends Server {
         const value: {
           staticPaths: string[] | undefined
           prerenderedRoutes: PrerenderedRoute[] | undefined
+          prerenderRouteMatchers: PrerenderRouteMatcher[] | undefined
           fallbackMode: FallbackMode | undefined
           validationFallbackRouteParams:
             | readonly FallbackRouteParam[]
@@ -934,6 +938,7 @@ export default class DevServer extends Server {
         } = {
           staticPaths: prerenderedRoutes?.map((route) => route.pathname),
           prerenderedRoutes,
+          prerenderRouteMatchers,
           fallbackMode: fallback,
           validationFallbackRouteParams,
         }
@@ -959,9 +964,10 @@ export default class DevServer extends Server {
           // the route whose pathname matches the page pattern (e.g.
           // /dynamic-params/[slug]) and has fallback route params describing
           // which params are unknown at build time.
-          const fallbackPrerenderedRoute = prerenderedRoutes?.find(
-            (route) => route.pathname === pathname
-          )
+          const fallbackRoute =
+            prerenderRouteMatchers?.find(
+              (route) => route.pathname === pathname
+            ) ?? prerenderedRoutes?.find((route) => route.pathname === pathname)
 
           existingManifest.dynamicRoutes[pathname] = {
             dataRoute: null,
@@ -971,8 +977,8 @@ export default class DevServer extends Server {
             fallbackExpire: undefined,
             fallbackHeaders: undefined,
             fallbackStatus: undefined,
-            fallbackRootParams: fallbackPrerenderedRoute?.fallbackRootParams,
-            fallbackRouteParams: fallbackPrerenderedRoute?.fallbackRouteParams,
+            fallbackRootParams: fallbackRoute?.fallbackRootParams,
+            fallbackRouteParams: fallbackRoute?.fallbackRouteParams,
             fallbackSourceRoute: pathname,
             prefetchDataRoute: undefined,
             prefetchDataRouteRegex: undefined,
