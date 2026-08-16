@@ -1177,7 +1177,7 @@ export async function buildAppStaticPaths({
   }
 
   let prerenderRouteMatchers: PrerenderRouteMatcher[] | undefined
-  if (prerenderedRoutes) {
+  if (prerenderedRoutes && isRoutePPREnabled) {
     for (const prerenderedRoute of prerenderedRoutes) {
       if (!prerenderedRoute.fallbackRouteParams?.length) continue
       ;(prerenderRouteMatchers ??= []).push({
