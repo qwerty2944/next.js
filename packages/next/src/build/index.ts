@@ -3300,8 +3300,14 @@ export default async function build(
             if (!appConfig) throw new InvariantError('App config not found')
 
             const ssgPageRoutesSet = new Set(pageInfos.get(page)?.ssgPageRoutes)
+            // Preserve the specificity order that unknown prerender routes had
+            // before matchers were modeled separately. Some metadata, such as
+            // prefetch hints, is collected using first-writer-wins semantics.
             const dynamicRouteMatchers = [
-              ...(prerenderRouteMatchers.get(originalAppPath) ?? []),
+              ...sortPageObjects(
+                prerenderRouteMatchers.get(originalAppPath) ?? [],
+                (route) => route.pathname
+              ),
             ]
 
             let hasRevalidateZero =
