@@ -30,7 +30,10 @@ import {
 } from '../../../telemetry/events'
 import { getSortedRoutes } from '../../../shared/lib/router/utils'
 import { sortByPageExts } from '../../../build/sort-by-page-exts'
-import { normalizeCatchAllRoutes } from './normalize-catchall-routes'
+import {
+  findIncompatibleParallelRouteSlots,
+  normalizeCatchAllRoutes,
+} from './normalize-catchall-routes'
 import { verifyAndRunTypeScript } from '../../../lib/verify-typescript-setup'
 import { verifyPartytownSetup } from '../../../lib/verify-partytown-setup'
 import { getNamedRouteRegex } from '../../../shared/lib/router/utils/route-regex'
@@ -97,6 +100,7 @@ import { isAppPageRoute } from '../../../lib/is-app-page-route'
 import { isAppRouteRoute } from '../../../lib/is-app-route-route'
 import { UnmatchedAppPagesError } from '../../../shared/lib/errors/unmatched-app-pages-error'
 import { MissingCanonicalInterceptionRoutesError } from '../../../shared/lib/errors/missing-canonical-interception-routes-error'
+import { IncompatibleParallelRouteSlotsError } from '../../../shared/lib/errors/incompatible-parallel-route-slots-error'
 import { findMissingCanonicalInterceptionRoutes } from '../../../shared/lib/router/utils/interception-routes'
 import {
   createRouteTypesManifest,
@@ -462,6 +466,7 @@ async function startWatcher(
       const duplicatePagePaths = new Set<string>()
       const appPageFilePaths = new Map<string, string>()
       const appRouteFilePaths = new Map<string, string>()
+      const parallelRouteLayoutFiles = new Map<string, string>()
       const pagesPageFilePaths = new Map<string, string>()
       const appRouteHandlers: Array<RouteInfo & { page: string }> = []
       const pageApiRoutes: RouteInfo[] = []
@@ -709,6 +714,11 @@ async function startWatcher(
 
           // Handle layouts separately - they don't get added to appPaths
           if (validFileMatcher.isAppLayoutPage(fileName)) {
+            const layoutPath =
+              normalizedPageName
+                .replace(/%5F/g, '_')
+                .replace(/\/layout$/, '') || '/'
+            parallelRouteLayoutFiles.set(layoutPath, fileName)
             const layoutRoute = ensureLeadingSlash(
               normalizeAppPath(normalizedPageName).replace(/\/layout$/, '')
             )
@@ -1059,18 +1069,35 @@ async function startWatcher(
         .strictRouteMatching
         ? findMissingCanonicalInterceptionRoutes(appPagePaths)
         : []
+      const incompatibleParallelRouteSlots = nextConfig.experimental
+        .strictRouteMatching
+        ? findIncompatibleParallelRouteSlots(appPagePaths, defaultAppPaths)
+        : []
       const routeMatchingError =
         missingCanonicalInterceptionRoutes.length > 0
           ? new MissingCanonicalInterceptionRoutesError(
               missingCanonicalInterceptionRoutes
             )
-          : unmatchedAppPages.length > 0
-            ? new UnmatchedAppPagesError(
-                unmatchedAppPages.map(
-                  (appPath) => appRouteFilePaths.get(appPath) ?? appPath
-                )
+          : incompatibleParallelRouteSlots.length > 0
+            ? new IncompatibleParallelRouteSlotsError(
+                incompatibleParallelRouteSlots.map((incompatibleRoute) => ({
+                  ...incompatibleRoute,
+                  layoutFile: path.relative(
+                    dir,
+                    parallelRouteLayoutFiles.get(
+                      incompatibleRoute.layoutPath
+                    ) ??
+                      path.join(appDir!, incompatibleRoute.layoutPath, 'layout')
+                  ),
+                }))
               )
-            : null
+            : unmatchedAppPages.length > 0
+              ? new UnmatchedAppPagesError(
+                  unmatchedAppPages.map(
+                    (appPath) => appRouteFilePaths.get(appPath) ?? appPath
+                  )
+                )
+              : null
       if (
         numConflicting === 0 &&
         routeMatchingError &&

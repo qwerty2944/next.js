@@ -59,13 +59,18 @@ import {
 } from '../lib/is-internal-component'
 import { RouteKind } from '../server/route-kind'
 import { encodeToBase64 } from './webpack/loaders/utils'
-import { normalizeCatchAllRoutes } from './normalize-catchall-routes'
+import {
+  findIncompatibleParallelRouteSlots,
+  normalizeCatchAllRoutes,
+} from './normalize-catchall-routes'
 import type { PageExtensions } from './page-extensions-type'
 import type { MappedPages } from './build-context'
 import { PAGE_TYPES } from '../lib/page-types'
 import { UnmatchedAppPagesError } from '../shared/lib/errors/unmatched-app-pages-error'
 import { MissingCanonicalInterceptionRoutesError } from '../shared/lib/errors/missing-canonical-interception-routes-error'
+import { IncompatibleParallelRouteSlotsError } from '../shared/lib/errors/incompatible-parallel-route-slots-error'
 import { findMissingCanonicalInterceptionRoutes } from '../shared/lib/router/utils/interception-routes'
+import { findPageFile } from '../server/lib/find-page-file'
 
 type ObjectValue<T> = T extends { [key: string]: infer V } ? V : never
 import { getStaticInfoIncludingLayouts } from './get-static-info-including-layouts'
@@ -448,9 +453,44 @@ export async function createEntrypoints(
       .strictRouteMatching
       ? findMissingCanonicalInterceptionRoutes(appPagePathsPerRoute)
       : []
+    const incompatibleParallelRouteSlots = config.experimental
+      .strictRouteMatching
+      ? findIncompatibleParallelRouteSlots(
+          appPathsPerRoute,
+          Object.keys(appDefaultPaths ?? {})
+        )
+      : []
     if (missingCanonicalInterceptionRoutes.length > 0) {
       throw new MissingCanonicalInterceptionRoutesError(
         missingCanonicalInterceptionRoutes
+      )
+    }
+    if (incompatibleParallelRouteSlots.length > 0) {
+      throw new IncompatibleParallelRouteSlotsError(
+        await Promise.all(
+          incompatibleParallelRouteSlots.map(async (incompatibleRoute) => {
+            const layoutPagePath = posix.join(
+              incompatibleRoute.layoutPath,
+              'layout'
+            )
+            const layoutFile = await findPageFile(
+              appDir,
+              layoutPagePath,
+              pageExtensions,
+              true
+            )
+
+            return {
+              ...incompatibleRoute,
+              layoutFile: relative(
+                rootDir,
+                layoutFile
+                  ? join(appDir, layoutFile)
+                  : join(appDir, layoutPagePath)
+              ),
+            }
+          })
+        )
       )
     }
     if (unmatchedAppPages.length > 0) {

@@ -3,6 +3,12 @@ import {
   INTERCEPTION_ROUTE_MARKERS,
   isInterceptionRouteAppPath,
 } from '../../../shared/lib/router/utils/interception-routes'
+import {
+  UNDERSCORE_GLOBAL_ERROR_ROUTE,
+  UNDERSCORE_GLOBAL_ERROR_ROUTE_ENTRY,
+  UNDERSCORE_NOT_FOUND_ROUTE,
+  UNDERSCORE_NOT_FOUND_ROUTE_ENTRY,
+} from '../../../shared/lib/entry-constants'
 
 type AppPathNormalizer = {
   normalize(pathname: string): string
@@ -11,6 +17,18 @@ type AppPathNormalizer = {
 export type NormalizeCatchAllRoutesOptions = {
   strictRouteMatching?: boolean
   defaultAppPaths?: Iterable<string>
+}
+
+export type IncompatibleParallelRouteSlots = {
+  layoutPath: string
+  route: string
+  missingSlots: string[]
+}
+
+type ParallelRouteLevel = {
+  parentSegments: string[]
+  namedSlots: Set<string>
+  hasChildrenSlot: boolean
 }
 
 const defaultNormalizer: AppPathNormalizer = {
@@ -103,6 +121,87 @@ export function normalizeCatchAllRoutes(
 }
 
 /**
+ * Finds ordinary route matchers that cannot construct every slot owned by a
+ * layout. Interception routes are partial updates and intentionally use
+ * different matching semantics.
+ */
+export function findIncompatibleParallelRouteSlots(
+  appPaths: Record<string, string[]>,
+  defaultAppPaths: Iterable<string> = []
+): IncompatibleParallelRouteSlots[] {
+  const allAppPaths = new Set([
+    ...Object.entries(appPaths)
+      .filter(([route]) => !isBuiltin(route))
+      .flatMap(([, matchedAppPaths]) => matchedAppPaths)
+      .filter((appPath) => !isBuiltin(appPath)),
+    ...[...defaultAppPaths].filter((appPath) => !isBuiltin(appPath)),
+  ])
+  const levelsByParent = collectParallelRouteLevels(allAppPaths)
+  const incompatibleRoutes: IncompatibleParallelRouteSlots[] = []
+
+  for (const [route, matchedAppPaths] of Object.entries(appPaths)) {
+    if (isBuiltin(route) || isInterceptionRouteAppPath(route)) continue
+
+    // Interception branches can be carried alongside an ordinary matcher, but
+    // they retain state instead of satisfying a hard-navigation slot.
+    const ordinaryAppPaths = matchedAppPaths.filter(
+      (appPath) => !isBuiltin(appPath) && !isInterceptionRouteAppPath(appPath)
+    )
+
+    for (const {
+      parentSegments,
+      namedSlots,
+      hasChildrenSlot,
+    } of levelsByParent.values()) {
+      if (
+        !ordinaryAppPaths.some((appPath) =>
+          hasPathPrefix(splitAppPath(appPath), parentSegments)
+        )
+      ) {
+        continue
+      }
+
+      const siblingSlots = [
+        ...(hasChildrenSlot ? ['children'] : []),
+        ...namedSlots,
+      ]
+      const missingSlots = siblingSlots.filter((slot) => {
+        const hasMatchedPage = ordinaryAppPaths.some((appPath) =>
+          isPathInSlot(appPath, parentSegments, slot)
+        )
+        const hasDefault = allAppPaths.has(
+          getDefaultAppPath(parentSegments, slot)
+        )
+        return !hasMatchedPage && !hasDefault
+      })
+
+      if (missingSlots.length > 0) {
+        incompatibleRoutes.push({
+          layoutPath: `/${parentSegments.join('/')}`,
+          route,
+          missingSlots: missingSlots.sort(),
+        })
+      }
+    }
+  }
+
+  return incompatibleRoutes.sort((a, b) =>
+    a.layoutPath === b.layoutPath
+      ? a.route.localeCompare(b.route)
+      : a.layoutPath.localeCompare(b.layoutPath)
+  )
+}
+
+function isBuiltin(appPath: string): boolean {
+  return (
+    appPath === UNDERSCORE_NOT_FOUND_ROUTE ||
+    appPath === UNDERSCORE_NOT_FOUND_ROUTE_ENTRY ||
+    appPath === UNDERSCORE_GLOBAL_ERROR_ROUTE ||
+    appPath === UNDERSCORE_GLOBAL_ERROR_ROUTE_ENTRY
+  )
+}
+
+/**
  * Removes catch-all-derived routes that can never render because another slot
  * at the same level has neither a matching page nor an explicit default.
  *
@@ -118,44 +217,7 @@ function pruneUnrenderableCatchAllRoutes(
     ...Object.values(appPaths).flat(),
     ...defaultAppPaths,
   ])
-  const levelsByParent = new Map<
-    string,
-    {
-      parentSegments: string[]
-      namedSlots: Set<string>
-      hasChildrenSlot: boolean
-    }
-  >()
-
-  for (const appPath of allAppPaths) {
-    const segments = splitAppPath(appPath)
-
-    for (let i = 0; i < segments.length - 1; i++) {
-      const segment = segments[i]
-      if (!isMatchableSlot(segment)) continue
-
-      const parentSegments = segments.slice(0, i)
-      const parentKey = JSON.stringify(parentSegments)
-      let level = levelsByParent.get(parentKey)
-      if (!level) {
-        level = {
-          parentSegments,
-          namedSlots: new Set(),
-          hasChildrenSlot: false,
-        }
-        levelsByParent.set(parentKey, level)
-      }
-      level.namedSlots.add(segment)
-    }
-  }
-
-  for (const appPath of allAppPaths) {
-    for (const level of levelsByParent.values()) {
-      if (isPathInSlot(appPath, level.parentSegments, 'children')) {
-        level.hasChildrenSlot = true
-      }
-    }
-  }
+  const levelsByParent = collectParallelRouteLevels(allAppPaths)
 
   for (const [route, matchedAppPaths] of Object.entries(appPaths)) {
     const catchAllAppPaths = matchedAppPaths.filter(isCatchAll)
@@ -215,6 +277,44 @@ function pruneUnrenderableCatchAllRoutes(
       delete appPaths[route]
     }
   }
+}
+
+function collectParallelRouteLevels(
+  allAppPaths: Iterable<string>
+): Map<string, ParallelRouteLevel> {
+  const levelsByParent = new Map<string, ParallelRouteLevel>()
+
+  for (const appPath of allAppPaths) {
+    const segments = splitAppPath(appPath)
+
+    for (let i = 0; i < segments.length - 1; i++) {
+      const segment = segments[i]
+      if (!isMatchableSlot(segment)) continue
+
+      const parentSegments = segments.slice(0, i)
+      const parentKey = JSON.stringify(parentSegments)
+      let level = levelsByParent.get(parentKey)
+      if (!level) {
+        level = {
+          parentSegments,
+          namedSlots: new Set(),
+          hasChildrenSlot: false,
+        }
+        levelsByParent.set(parentKey, level)
+      }
+      level.namedSlots.add(segment)
+    }
+  }
+
+  for (const appPath of allAppPaths) {
+    for (const level of levelsByParent.values()) {
+      if (isPathInSlot(appPath, level.parentSegments, 'children')) {
+        level.hasChildrenSlot = true
+      }
+    }
+  }
+
+  return levelsByParent
 }
 
 function splitAppPath(appPath: string): string[] {
