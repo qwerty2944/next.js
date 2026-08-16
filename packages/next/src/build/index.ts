@@ -138,7 +138,11 @@ import {
   pageToRoute,
 } from './utils'
 import type { DynamicManifestRoute, PageInfo, PageInfos } from './utils'
-import type { FallbackRouteParam, PrerenderedRoute } from './static-paths/types'
+import type {
+  FallbackRouteParam,
+  PrerenderRouteMatcher,
+  PrerenderedRoute,
+} from './static-paths/types'
 import type { AppSegmentConfig } from './segment-config/app/app-segment-config'
 import { writeBuildId } from './write-build-id'
 import { normalizeLocalePath } from '../shared/lib/i18n/normalize-locale-path'
@@ -2164,6 +2168,7 @@ export default async function build(
       const serverPropsPages = new Set<string>()
       const additionalPaths = new Map<string, PrerenderedRoute[]>()
       const staticPaths = new Map<string, PrerenderedRoute[]>()
+      const prerenderRouteMatchers = new Map<string, PrerenderRouteMatcher[]>()
       const appNormalizedPaths = new Map<string, string>()
       const fallbackModes = new Map<string, FallbackMode>()
       const appDefaultConfigs = new Map<string, AppSegmentConfig>()
@@ -2537,6 +2542,13 @@ export default async function build(
                               (route) => route.pathname
                             )
                             isSSG = true
+                          }
+
+                          if (workerResult.prerenderRouteMatchers) {
+                            prerenderRouteMatchers.set(
+                              originalAppPath,
+                              workerResult.prerenderRouteMatchers
+                            )
                           }
 
                           const appConfig = workerResult.appConfig || {}
@@ -3200,7 +3212,10 @@ export default async function build(
           // If there was no result, there's nothing more to do.
           if (!exportResult) return
 
-          const getFallbackMode = (route: PrerenderedRoute) => {
+          const getFallbackMode = (
+            route: PrerenderRouteMatcher,
+            prerenderedRoute: PrerenderedRoute | undefined
+          ) => {
             const hasEmptyStaticShell = exportResult.byPath.get(
               route.pathname
             )?.hasEmptyStaticShell
@@ -3210,7 +3225,7 @@ export default async function build(
             // static render mode.
             if (
               hasEmptyStaticShell &&
-              !route.throwOnEmptyStaticShell &&
+              !prerenderedRoute?.throwOnEmptyStaticShell &&
               route.fallbackMode === FallbackMode.PRERENDER
             ) {
               return FallbackMode.BLOCKING_STATIC_RENDER
@@ -3285,6 +3300,9 @@ export default async function build(
             if (!appConfig) throw new InvariantError('App config not found')
 
             const ssgPageRoutesSet = new Set(pageInfos.get(page)?.ssgPageRoutes)
+            const dynamicRouteMatchers = [
+              ...(prerenderRouteMatchers.get(originalAppPath) ?? []),
+            ]
 
             let hasRevalidateZero =
               appConfig.revalidate === 0 ||
@@ -3342,13 +3360,10 @@ export default async function build(
                 : []),
             ]
 
-            // We should collect all the dynamic routes into a single array for
-            // this page. Including the full fallback route (the original
-            // route), any routes that were generated with unknown route params
-            // should be collected and included in the dynamic routes part
-            // of the manifest instead.
+            // Concrete outputs are written to the static routes manifest.
+            // Outputs with unknown params are represented separately by the
+            // matcher directives collected above.
             const staticPrerenderedRoutes: PrerenderedRoute[] = []
-            const dynamicPrerenderedRoutes: PrerenderedRoute[] = []
 
             // Sort the outputted routes to ensure consistent output. Any route
             // though that has unknown route params will be pulled and sorted
@@ -3414,9 +3429,8 @@ export default async function build(
                 prerenderedRoute.fallbackRouteParams &&
                 prerenderedRoute.fallbackRouteParams.length > 0
               ) {
-                // If the route has unknown params, then we need to add it to
-                // the list of dynamic routes.
-                dynamicPrerenderedRoutes.push(prerenderedRoute)
+                // Fallback outputs have a corresponding matcher directive and
+                // are handled below. They are not concrete static routes.
               } else {
                 // If the route doesn't have unknown params, then we need to
                 // add it to the list of static routes.
@@ -3577,20 +3591,21 @@ export default async function build(
               // they are enabled, then it'll already be included in the
               // prerendered routes.
               if (!isRoutePPREnabled) {
-                dynamicPrerenderedRoutes.push({
-                  params: {},
+                dynamicRouteMatchers.push({
                   pathname: page,
-                  encodedPathname: page,
                   fallbackRouteParams: [],
                   fallbackMode:
                     fallbackModes.get(originalAppPath) ??
                     FallbackMode.NOT_FOUND,
                   fallbackRootParams: [],
-                  throwOnEmptyStaticShell: true,
                 })
               }
 
-              for (const route of dynamicPrerenderedRoutes) {
+              const prerenderedRoutesByPathname = new Map(
+                prerenderedRoutes.map((route) => [route.pathname, route])
+              )
+
+              for (const route of dynamicRouteMatchers) {
                 // Static metadata files are rewritten above into the known
                 // static bucket under their `-`-placeholder pathname, so any
                 // entry that slips through here (e.g. an unexpected fallback
@@ -3695,10 +3710,10 @@ export default async function build(
 
                 if (route.pathname === page) {
                   // The route pattern entry (for example `/blog/[slug]`) is
-                  // also present in `dynamicPrerenderedRoutes`. Keep updating
-                  // the parent entry in place so it retains its `ssgPageRoutes`
-                  // subtree; if we rewrote it like a concrete child route we
-                  // would lose the generated child paths from the build output.
+                  // also present in `dynamicRouteMatchers`. Keep updating the
+                  // parent entry in place so it retains its `ssgPageRoutes`
+                  // subtree; rewriting it like a concrete child route would
+                  // lose the generated child paths from the build output.
                   pageInfos.set(page, {
                     ...(pageInfos.get(page) as PageInfo),
                     initialCacheControl: cacheControl,
@@ -3726,7 +3741,10 @@ export default async function build(
                   })
                 }
 
-                const fallbackMode = getFallbackMode(route)
+                const fallbackMode = getFallbackMode(
+                  route,
+                  prerenderedRoutesByPathname.get(route.pathname)
+                )
 
                 // When the route is configured to serve a prerender, we should
                 // use the cache control from the export result. If it can't be

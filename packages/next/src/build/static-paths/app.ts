@@ -3,6 +3,7 @@ import type { AppPageModule } from '../../server/route-modules/app-page/module'
 import type { AppSegment } from '../segment-config/app/app-segments'
 import type {
   FallbackRouteParam,
+  PrerenderRouteMatcher,
   PrerenderedRoute,
   StaticPathsResult,
 } from './types'
@@ -1175,5 +1176,20 @@ export async function buildAppStaticPaths({
     assignStaticShellMetadata(prerenderedRoutes, prerenderablePathSegments)
   }
 
-  return { fallbackMode, prerenderedRoutes }
+  let prerenderRouteMatchers: PrerenderRouteMatcher[] | undefined
+  if (prerenderedRoutes) {
+    for (const prerenderedRoute of prerenderedRoutes) {
+      if (!prerenderedRoute.fallbackRouteParams?.length) continue
+      ;(prerenderRouteMatchers ??= []).push({
+        pathname: prerenderedRoute.pathname,
+        fallbackRouteParams: prerenderedRoute.fallbackRouteParams,
+        fallbackMode: prerenderedRoute.fallbackMode,
+        fallbackRootParams: prerenderedRoute.fallbackRootParams,
+        remainingPrerenderableParams:
+          prerenderedRoute.remainingPrerenderableParams,
+      })
+    }
+  }
+
+  return { fallbackMode, prerenderedRoutes, prerenderRouteMatchers }
 }

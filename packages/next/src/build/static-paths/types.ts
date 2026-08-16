@@ -54,7 +54,21 @@ type FallbackPrerenderedRoute = {
 
 export type PrerenderedRoute = StaticPrerenderedRoute | FallbackPrerenderedRoute
 
+/**
+ * Describes how a dynamic pathname is matched when no concrete build-time
+ * output matches it. A matcher may refer to a prerendered fallback shell with
+ * the same pathname, but it is not itself an output that should be rendered.
+ */
+export type PrerenderRouteMatcher = {
+  readonly pathname: string
+  readonly fallbackRouteParams: readonly FallbackRouteParam[]
+  readonly fallbackMode: FallbackMode | undefined
+  readonly fallbackRootParams: readonly string[]
+  readonly remainingPrerenderableParams?: readonly FallbackRouteParam[]
+}
+
 export type StaticPathsResult = {
   fallbackMode: FallbackMode | undefined
   prerenderedRoutes: PrerenderedRoute[] | undefined
+  prerenderRouteMatchers?: PrerenderRouteMatcher[]
 }
